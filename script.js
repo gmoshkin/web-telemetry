@@ -1,93 +1,157 @@
+/* TODO:
+ * - display module name on the left on each of the lanes
+ * - display section name inside the rectangle, truncate obviously
+ * - show stats for the currently highlighted section:
+ *    - count appearances
+ *    - total duration
+ *    - mean/average/standard deviation
+ */
 const canvas = document.getElementById("canvas");
 canvas.width = 1300;
 canvas.height = 600;
 const ctx = canvas.getContext("2d");
-
-document.onmousemove = (event) => { lastEvent = event; mousePos = getMousePos() };
-canvas.onmousedown = (event) => { mouseDown = event.which; };
-canvas.onmouseup = (event) => { mouseDown = 0 };
-
 
 setInterval(redraw, 17);
 
 var mode = null;
 var lastButton = null;
 
-var lastEvent = null;
 var mouseDown = 0;
 let mousePos = null;
+let mouse_x = null;
+let mouse_y = null;
+let mouse_x_start = null;
+let mouse_y_start = null;
 var selected = null;
 
 var data = JSON.parse(DATA);
 var nanos_per_pixel_log = 10;
 var nanos_per_pixel = null;
 
-var modules = {};
+var modules_by_name = {};
+var modules_by_id = [];
 var sections = {};
 
 let start_min = data[0][2];
 for (let i = 0; i < data.length; i++) {
     let [module, section, start, duration] = data[i];
-    if (modules[module] === undefined) modules[module] = Object.keys(modules).length;
+    if (modules_by_name[module] === undefined) {
+        modules_by_name[module] = modules_by_id.length;
+        modules_by_id.push(module);
+    }
     if (sections[section] === undefined) sections[section] = Object.keys(sections).length;
     data[i] = {
-        module_id: modules[module],
+        module_id: modules_by_name[module],
         section_id: sections[section],
         start: start - start_min,
         duration,
     };
 }
 
-let module_keys = Object.keys(modules)
-for (let i = 0; i < module_keys.length; i++) modules[i] = module_keys[i];
-
 let section_keys = Object.keys(sections)
 for (let i = 0; i < section_keys.length; i++) sections[i] = section_keys[i];
 
-var scroll_x_nanos = data[1].start;
-addEventListener("wheel", (event) => {
-    if (event.ctrlKey) {
-        nanos_per_pixel_log += event.deltaY / 100;
-    } else {
-        scroll_x_nanos += nanos_per_pixel * event.deltaY;
-    }
-});
+const Mue = '\xb5';
 
-console.log(scroll_x_nanos);
-document.getElementById("left_start").onchange = () => {
-    scroll_x_nanos = eval(document.getElementById("left_start").value);
+////////////////////////////////////////////////////////////////////////////////
+// input handling
+
+let scroll_x_nanos = data[1].start;
+
+canvas.onmousemove = (event) => {
+    update_mouse_position(event)
 };
+canvas.onmousedown = (event) => {
+    update_mouse_position(event)
+    mouseDown = event.which;
+    mouse_x_start = mouse_x;
+    mouse_y_start = mouse_y;
+};
+canvas.onmouseup = (event) => { mouseDown = false };
+
+addEventListener("wheel", (event) => {
+    if (event.target != canvas) return;
+    event.preventDefault();
+
+    update_mouse_position(event);
+
+    if (event.wheelDeltaX) do_horizontal_scrolling(-event.wheelDeltaX);
+    if (event.wheelDeltaY) {
+        if (event.ctrlKey) do_zooming(-event.wheelDeltaY/2);
+        else do_horizontal_scrolling(event.wheelDeltaY);
+    }
+    if (event.deltaZ) do_zooming(event.deltaZ);
+
+    console.log(event);
+
+}, {passive: false});
+
+let canvas_rect = canvas.getBoundingClientRect();
+function update_mouse_position(event) {
+    mouse_x = event.clientX - canvas_rect.x;
+    mouse_y = event.clientY - canvas_rect.y;
+}
+
+function do_horizontal_scrolling(delta) {
+    scroll_x_nanos += nanos_per_pixel * delta;
+}
+
+function do_zooming(delta) {
+    nanos_per_pixel_log += delta / 500;
+    let nanos_per_pixel_was = nanos_per_pixel;
+    nanos_per_pixel = Math.exp(nanos_per_pixel_log);
+    scroll_x_nanos -= mouse_x * (nanos_per_pixel - nanos_per_pixel_was);
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // redraw
 
+var once = false;
 function redraw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     nanos_per_pixel = Math.exp(nanos_per_pixel_log);
 
-    var top = 10;
-    var height = 20;
-    var x = 0;
-
     let scale = 1 / nanos_per_pixel;
-
-    document.getElementById("left_start").value = scroll_x_nanos;
 
     ctx.fillStyle = 'red';
     ctx.strokeStyle = 'black';
 
-    mousePos = getMousePos();
-    let mouse_x = mousePos.x;
-    let mouse_y = mousePos.y;
+    let y = 10;
+    ctx.lineWidth = 1;
 
+    // Draw highlighted region
+    draw_highlighted_region();
+
+    // Draw scale ruler
+    y = draw_scale_ruler(y);
+
+    //
+    // Draw sections rectangles
+    //
     ctx.fillStyle = 'black';
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'black';
 
     let highlighted_sections = [];
     let super_highlighted_section = null;
 
+    var height = 20;
+    var x = 0;
+    let top = y + 10;
+
     i = 0;
     let sanity_check = 1000;
+    let current_module_separators = [];
+    let current_module_start_x = [];
+    let current_module_end_x = [];
+    for (let module_id = 0; module_id < modules_by_id.length; module_id++) {
+        current_module_separators[module_id] = [];
+        current_module_start_x[module_id] = 0;
+        current_module_end_x[module_id] = -Infinity;
+    }
+    ctx.fillStyle = 'red';
+    // for (let i = 0; i < data.length; i++) {
     for (let i = 0; i < data.length; i++) {
         let { start, duration, module_id, section_id } = data[i];
 
@@ -97,68 +161,144 @@ function redraw() {
         if (x + w < 0) continue;
         if (x > canvas.width) break;
 
-        ctx.fillStyle = 'red';
-        ctx.fillRect(x, y, w, height);
-        draw_thin_rect(x, y, w, height);
-
-        ctx.fillStyle = 'black';
-        ctx.font = "14px bold serif";
-
-        // let module = modules[module_id];
-        // let section = sections[section_id];
-        // ctx.fillText(`${module}.${section}`, x, y + height + 10);
-
         if (mouse_x >= x && mouse_x <= x + w) {
             highlighted_sections.push(data[i]);
             if (mouse_y >= y && mouse_y <= y + height)
                 super_highlighted_section = data[i];
         }
 
+        let prev_end = current_module_end_x[module_id];
+        if (x - prev_end < 1) {
+            current_module_separators[module_id].push(x + w);
+            current_module_end_x[module_id] = x + w;
+            continue;
+        }
+
+        let x0 = current_module_start_x[module_id];
+        let x1 = current_module_end_x[module_id];
+        ctx.fillRect(x0, y, x1 - x0, height);
+        draw_thin_rect(x0, y, x1 - x0, height);
+
+        let separators = current_module_separators[module_id];
+        ctx.beginPath();
+        for (let j = 0; j < separators.length - 1; j++) {
+            let xj = separators[j];
+            ctx.moveTo(xj, y);
+            ctx.lineTo(xj, y + height);
+        }
+        ctx.stroke();
+
+        current_module_start_x[module_id] = x
+        separators.length = 0;
+        separators.push(x + w);
+        current_module_end_x[module_id] = x + w;
+
         if (sanity_check-- <= 0) break;
     }
+    for (let module_id = 0; module_id < modules_by_id.length; module_id++) {
+        let x0 = current_module_start_x[module_id];
+        if (x0 == 0) continue;
+        let x1 = current_module_end_x[module_id];
+        let y = top + module_id * height;
+        ctx.fillRect(x0, y, x1 - x0, height);
+        draw_thin_rect(x0, y, x1 - x0, height);
 
-    ctx.fillStyle = '#808080';
+        let separators = current_module_separators[module_id];
+        ctx.beginPath();
+        for (let j = 0; j < separators.length - 1; j++) {
+            let xj = separators[j];
+            ctx.moveTo(xj, y);
+            ctx.lineTo(xj, y + height);
+        }
+        ctx.stroke();
+    }
+    if (!once) {
+        console.log([current_module_end_x, current_module_start_x]);
+        once = true;
+    }
+
+    //
+    // Draw mouse stuff
+    //
+    ctx.fillStyle = '#80808080';
     ctx.fillRect(mouse_x, 0, 1, canvas.height);
 
     ctx.fillStyle = 'black';
     ctx.font = "20px bold serif";
-    let y = canvas.height - 2;
+    y = canvas.height - 2;
 
-    ctx.fillText(`nanos per pixel: ${nanos_per_pixel}`, 0, y);
     y -= 20;
 
-    let mouse_nanos = scroll_x_nanos + mouse_x * nanos_per_pixel;
-    ctx.fillText(`${mouse_nanos}`, 0, y);
-    y -= 20;
-
+    //
+    // Draw highlighted section text
+    //
+    if (super_highlighted_section) {
+        let { start, duration, module_id, section_id } = super_highlighted_section;
+        let x = (start - scroll_x_nanos) * scale;
+        let y = top + module_id * height;
+        let w = duration * scale;
+        ctx.fillStyle = '#ff8080';
+        ctx.fillRect(x, y, w, height);
+    }
     for (let i = 0; i < highlighted_sections.length; i++) {
         let { start, duration, module_id, section_id } = highlighted_sections[i];
 
-        let module = modules[module_id];
+        {
+            let x = (start - scroll_x_nanos) * scale;
+            let y = top + module_id * height;
+            let w = duration * scale;
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'yellow';
+            draw_thin_rect(x, y, w, height);
+        }
+
+        let module = modules_by_id[module_id];
         let section = sections[section_id];
-        let d = duration_text(duration);
-        ctx.fillText(`${module}.${section}: ${d} [${start}]`, 0 + 2, y);
+        ctx.fillStyle = 'black';
+        ctx.fillText(`${module}.${section}: ${format_time(duration)} [start: ${format_time(start)}]`, 0 + 2, y);
         y -= 20;
     }
 
+    // Draw highlighted region duration
+    draw_highlighted_region_duration();
+
+    if (super_highlighted_section) {
+        let { start, duration, module_id, section_id } = super_highlighted_section;
+        ctx.fillStyle = 'black';
+        ctx.font = "18px bold serif";
+        let module = modules_by_id[module_id];
+        let section = sections[section_id];
+        x = mouse_x + 4;
+        let y = top + module_id * height + 36;
+        ctx.fillText(`${module}.${section}: ${format_time(duration)}`, x, y);
+    }
 }
 
-function duration_text(nanos) {
-    if (nanos < 1000) return `${nanos}ns`;
+function format_time(nanos) {
+    if (nanos < 1000) {
+        nanos = nanos.toLocaleString('en-US', { maximumFractionDigits: 3 });
+        return `${nanos}ns`;
+    }
     if (nanos < 1000_000) {
         let micros = nanos / 1000;
-        return `${micros}micros`;
+        micros = micros.toLocaleString('en-US', { maximumFractionDigits: 3 });
+        return `${micros}\xb5s`;
     }
     if (nanos < 1000_000_000) {
-        let micros = Math.round(nanos / 1000);
-        let millis = micros / 1000;
+        let millis = nanos / 1000_000;
+        millis = millis.toLocaleString('en-US', { maximumFractionDigits: 3 });
         return `${millis}ms`;
     }
     // if (nanos < 1000_000_000_000) {
-        let millis = Math.round(nanos / 1000_000);
-        let seconds = millis / 1000;
+        let seconds = nanos / 1000_000_000;
+        seconds = seconds.toLocaleString('en-US', { maximumFractionDigits: 3 });
         return `${seconds}s`;
     // }
+}
+
+function format_float(f, d) {
+    if (d === undefined) d = 3;
+    return f.toLocaleString('en-US', { maximumFractionDigits: d });
 }
 
 function draw_thin_rect(x, y, w, h) {
@@ -171,327 +311,106 @@ function draw_thin_rect(x, y, w, h) {
     ctx.stroke();
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// path
+function draw_scale_ruler(y) {
+    let x = 0;
 
-const path = new Figure('path');
+    let pixels_per_nano = 1 / nanos_per_pixel;
+    let mouse_nanos = scroll_x_nanos + mouse_x * nanos_per_pixel;
 
-path.update = function() {
-    if (mouseDown) {
-        this.updateSelectedPoint();
-        // only add/remove points if in appropriate mode
-        if (mode === this.button.id) {
-            if (mouseDown === 1) {
-                if (this.nothingIsSelected()) {
-                    this.points.push(mousePos);
-                    this.selectPoint(this.points.length - 1);
-                }
-            } else if (mouseDown === 2 && this.selectedPoint() != null) {
-                remove(this.points, this.selectedPoint());
-                this.deselectPoint();
-            }
-        }
-        // move selected point
-        if (mouseDown === 1) {
-            if (this.selectedPoint() != null) {
-                this.points[this.selectedPoint()] = mousePos;
-            }
-        }
-    } else {
-        this.hoverPoint = this.getPointIdxUnderMouse();
-        if (this.selectedPoint() != null) {
-            this.deselectPoint();
-        }
-    }
-}
+    // Determine the adequet scale
+    let scale = 1;
+    let scales = [];
+    for (let i = 0; i < 10; i++) {
+        let pixels = pixels_per_nano * scale;
+        if (pixels > 10 && pixels < 100) scales.push(scale);
 
-path.draw = function() {
-    this.drawPath();
-    this.drawPoints();
-}
+        pixels = pixels_per_nano * scale * 2;
+        if (pixels > 10 && pixels < 100) scales.push(scale * 2);
 
-////////////////////////////////////////////////////////////////////////////////
-// circle
+        pixels = pixels_per_nano * scale * 5;
+        if (pixels > 10 && pixels < 100) scales.push(scale * 5);
 
-const circle = new Figure('circle');
-circle.points = [{x: 350, y: 200}, {x: 500, y: 200}]
-Object.defineProperty(circle, 'origin', { get() { return this.points[0] } })
-Object.defineProperty(circle, 'radius', {
-    get() {
-        let [a, b] = this.points;
-        return Math.pow(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2), 1/2)
-    }
-})
-
-circle.update = function() {
-    if (mouseDown) {
-        this.updateSelectedPoint();
-        // only add/remove points if in appropriate mode
-        if (mode === this.button.id) {
-            if (mouseDown === 1 && this.points.length < 2) {
-                if (this.nothingIsSelected()) {
-                    this.points.push(mousePos);
-                    this.selectPoint(this.points.length - 1);
-                }
-            } else if (mouseDown === 2 && this.selectedPoint() != null) {
-                remove(this.points, this.selectedPoint());
-                this.deselectPoint();
-            }
-        }
-        // move selected point
-        if (mouseDown === 1) {
-            if (this.selectedPoint() != null) {
-                this.points[this.selectedPoint()] = mousePos;
-            }
-        }
-    } else {
-        this.hoverPoint = this.getPointIdxUnderMouse();
-        if (this.selectedPoint() != null) {
-            this.deselectPoint();
-        }
-    }
-}
-
-circle.draw = function() {
-    if (this.points.length == 2) {
-        ctx.beginPath();
-        ctx.arc(this.origin.x, this.origin.y, this.radius, 0, 2 * Math.PI);
-        this.stroke();
-    }
-    this.drawPoints();
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// line
-
-const line = new Figure('line');
-line.points = [{x: 320, y: 300}, {x: 500, y: 400}]
-line.lineDash = [3, 3];
-defineLineProperties(line);
-
-line.update = function() {
-    if (mouseDown) {
-        this.updateSelectedPoint();
-        // only add/remove points if in appropriate mode
-        if (mode === this.button.id) {
-            if (mouseDown === 1 && this.points.length < 2) {
-                if (this.nothingIsSelected()) {
-                    this.points.push(mousePos);
-                    this.selectPoint(this.points.length - 1);
-                }
-            } else if (mouseDown === 2 && this.selectedPoint() != null) {
-                remove(this.points, this.selectedPoint());
-                this.deselectPoint();
-            }
-        }
-        // move selected point
-        if (mouseDown === 1) {
-            if (this.selectedPoint() != null) {
-                this.points[this.selectedPoint()] = mousePos;
-            }
-        }
-    } else {
-        this.hoverPoint = this.getPointIdxUnderMouse();
-        if (this.selectedPoint() != null) {
-            this.deselectPoint();
-        }
-    }
-}
-
-line.draw = function() {
-    this.drawLine();
-    this.drawPoints();
-}
-
-function defineLineProperties(line) {
-    Object.defineProperty(line, 'start', { get() {
-        return this.points[0].x < this.points[1].x ? this.points[0] : this.points[1]
-    } })
-    Object.defineProperty(line, 'end', { get() {
-        return this.points[0].x < this.points[1].x ? this.points[1] : this.points[0]
-    } })
-    Object.defineProperty(line, 'k', { get() {
-        return (this.end.y - this.start.y) / (this.end.x - this.start.x)
-    } })
-    Object.defineProperty(line, 'b', { get() {
-        return this.start.y - this.start.x * this.k
-    } })
-
-    line.drawLine = function() {
-        if (this.points.length == 2) {
-            ctx.beginPath();
-            ctx.moveTo(0, this.b);
-            ctx.lineTo(canvas.width, this.k * canvas.width + this.b);
-            this.stroke();
-        }
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// intercetion
-
-const intersection = new Figure();
-intersection.points = []
-intersection.radius = new Figure();
-intersection.radius.lineDash = [1, 4];
-intersection.radius.strokeStyle = '#303030';
-intersection.radius.points = [circle.origin];
-defineLineProperties(intersection.radius);
-
-intersection.update = function() {
-    let a = sqr(line.k) + 1;
-    let b = 2 * (line.k * (line.b - circle.origin.y) - circle.origin.x);
-    let c = sqr(circle.origin.x) + sqr(line.b - circle.origin.y) - sqr(circle.radius);
-    let x0 = (-b + sqrt(sqr(b) - 4 * a * c)) / 2 / a;
-    let x1 = (-b - sqrt(sqr(b) - 4 * a * c)) / 2 / a;
-    if (line.start.x < x0 && x0 < line.end.x) {
-        this.points[0] = { x: x0, y: line.k * x0 + line.b }
-    } else {
-        this.points[0] = { x: x1, y: line.k * x1 + line.b }
-    }
-    this.radius.points[0] = circle.origin;
-    this.radius.points[1] = this.points[0];
-}
-
-intersection.draw = function() {
-    this.radius.drawLine();
-    if (!isNaN(this.points[0].x)) {
-        let radiusAngle = Math.atan(this.radius.k);
-        let lineAngle = Math.atan(line.k);
-        let reflectionAngle = 2 * radiusAngle - lineAngle;
-        let k = Math.tan(reflectionAngle);
-        let b = this.points[0].y - this.points[0].x * k;
-        ctx.beginPath();
-        ctx.moveTo(0, b);
-        ctx.lineTo(canvas.width, k * canvas.width + b);
-        this.radius.stroke();
-    }
-    this.drawPoints();
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// figure
-
-function Figure(mode) {
-    this.points = [];
-    this.hoverPoint = null;
-    this.button = mode && addModeButton(mode);
-
-    this.hoverFillStyle = '#859900';
-    this.selectedFillStyle = '#dc322f';
-    this.regularFillStyle = '#905040';
-    this.strokeStyle = '#000000';
-    this.lineDash = [];
-
-    this.nothingIsSelected = function() { return selected === null; }
-    this.selectPoint = function(point) { selected = { figure: this, point }; }
-    this.deselectPoint = function() { selected = null; }
-
-    this.selectedPoint = function() {
-        if (selected != null && selected.figure === this) {
-            return selected.point;
-        }
+        scale *= 10;
     }
 
-    this.updateSelectedPoint = function() {
-        if (selected != null) return;
-        let point = this.getPointIdxUnderMouse();
-        if (point === null) return;
-        this.selectPoint(point);
-    }
-
-    this.getPointIdxUnderMouse = function() {
-        if (mousePos == null) return null;
-        for (let [i, {x, y}] of this.points.entries()) {
-            if (Math.pow(x - mousePos.x, 2) + Math.pow(y - mousePos.y, 2) < 10 * 10) {
-                return i;
-            }
-        }
-        return null;
-    }
-
-    this.drawPath = function() {
-        for (let i = 0; i < this.points.length - 1; i++) {
-            ctx.beginPath();
-            ctx.moveTo(this.points[i].x, this.points[i].y);
-            ctx.lineTo(this.points[i + 1].x, this.points[i + 1].y);
-            this.stroke();
-        }
-    }
-
-    this.drawPoints = function() {
-        for (let [i, {x, y}] of this.points.entries()) {
-            if (i === this.hoverPoint) {
-                drawPoint(x, y, 8, this.hoverFillStyle);
-            }
-            let style = (i === this.selectedPoint()) ? this.selectedFillStyle : this.regularFillStyle;
-            drawPoint(x, y, 5, style);
-        }
-    }
-
-    this.stroke = function() {
-        ctx.strokeStyle = this.strokeStyle;
-        ctx.setLineDash(this.lineDash || []);
-        ctx.stroke();
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// modes
-
-function addModeButton(name) {
-    let button = document.createElement('button')
-    button.innerHTML = name;
-    button.id = name;
-    button.className = 'button_off';
-    button.onclick = (event) => { toggleMode(button) }
-    document.getElementById('buttons').appendChild(button);
-    return button
-}
-
-function toggleMode(button) {
-    if (lastButton != null) lastButton.className = 'button_off';
-    if (lastButton === button) {
-        lastButton = null;
-        mode = null;
-    } else {
-        button.className = 'button_on';
-        lastButton = button;
-        mode = button.id;
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// util
-
-const sqr = (x) => Math.pow(x, 2);
-const sqrt = (x) => Math.pow(x, 1/2);
-
-function unwrapOr(nullable, def) {
-    return (nullable === null) ? def : nullable;
-}
-
-function remove(arr, i) {
-    if (0 > i || i >= arr.length) return null;
-    let tail = arr.splice(i + 1);
-    let [removed] = arr.splice(i);
-    arr.push(...tail);
-    return removed;
-}
-
-function getMousePos() {
-    if (lastEvent === null) return { x: -1, y: -1 };
-    let { x: canvasX, y: canvasY } = canvas.getBoundingClientRect();
-    let { clientX: mouseX, clientY: mouseY } = lastEvent;
-    return { x: mouseX - canvasX, y: mouseY - canvasY }
-}
-
-function drawPoint(x, y, r, style) {
     ctx.beginPath();
-    ctx.arc(x, y, r, 0, 2 * Math.PI);
-    if (style === undefined) {
-        style = '#905040';
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y);
+
+    h = 7;
+    for (let i = 0; i < scales.length; i++) {
+        let scale = scales[i];
+        let closest_multiple = Math.ceil(scroll_x_nanos / scale) * scale;
+        let x0 = (closest_multiple - scroll_x_nanos) * pixels_per_nano;
+        let pixels = pixels_per_nano * scale;
+
+        for (let x = x0; x < canvas.width; x += pixels) {
+            ctx.moveTo(x, y - h / 2);
+            ctx.lineTo(x, y + h / 2);
+        }
+
+        if (i == scales.length - 1) {
+            ctx.stroke();
+
+            y += 15;
+
+            let mouse_closest_multiple = Math.floor(mouse_nanos / scale) * scale;
+            let x0 = (mouse_closest_multiple - scroll_x_nanos) * pixels_per_nano;
+
+            let text = `${format_time(scale)}`;
+            ctx.font = "14px bold serif";
+            let m = ctx.measureText(text);
+
+            h /= 1.31;
+            ctx.strokeStyle = '#808080';
+            ctx.beginPath();
+            ctx.moveTo(x0, y - h / 2);
+            ctx.lineTo(x0, y + h / 2);
+
+            ctx.moveTo(x0, y);
+            let l = pixels / 2 - m.width / 2 - 3;
+            ctx.lineTo(x0 + l, y);
+            ctx.moveTo(x0 + pixels - l, y);
+            ctx.lineTo(x0 + pixels, y);
+
+            ctx.moveTo(x0 + pixels, y - h / 2);
+            ctx.lineTo(x0 + pixels, y + h / 2);
+            ctx.stroke();
+
+            ctx.fillStyle = '#808080';
+            y += 5;
+            x = x0 + pixels / 2 - m.width / 2;
+            ctx.fillText(text, x, y);
+        }
+
+        h *= 1.45;
     }
-    ctx.fillStyle = style;
-    ctx.fill();
+
+    y += 16;
+
+    if (mouse_x !== null) {
+        x = mouse_x + 4;
+        ctx.fillText(`${format_time(mouse_nanos)}`, x, y);
+    }
+
+    return y;
+}
+
+function draw_highlighted_region() {
+    if (!mouseDown) return;
+
+    ctx.fillStyle = '#8080f060';
+    ctx.fillRect(mouse_x_start, 0, mouse_x - mouse_x_start, canvas.height);
+}
+
+function draw_highlighted_region_duration() {
+    if (!mouseDown) return;
+
+    let t0 = scroll_x_nanos + mouse_x_start * nanos_per_pixel;
+    let t1 = scroll_x_nanos + mouse_x * nanos_per_pixel;
+    let x = mouse_x + 6;
+    let y = mouse_y - 6;
+    ctx.fillStyle = 'black';
+    ctx.font = '14px bold serif';
+    ctx.fillText(`${format_time(Math.abs(t1 - t0))}`, x, y);
 }
