@@ -27,6 +27,7 @@ var selected = null;
 var data = JSON.parse(DATA);
 var nanos_per_pixel_log = 10;
 var nanos_per_pixel = null;
+let current_scale = null;
 
 var modules_by_name = {};
 var modules_by_id = [];
@@ -81,9 +82,6 @@ addEventListener("wheel", (event) => {
         else do_horizontal_scrolling(event.wheelDeltaY);
     }
     if (event.deltaZ) do_zooming(event.deltaZ);
-
-    console.log(event);
-
 }, {passive: false});
 
 let canvas_rect = canvas.getBoundingClientRect();
@@ -94,19 +92,35 @@ function update_mouse_position(event) {
 
 function do_horizontal_scrolling(delta) {
     scroll_x_nanos += nanos_per_pixel * delta;
+    clamp_horizontal_scroll();
 }
 
+let min_nanos_per_pixel_log = Math.log(1/100);
 function do_zooming(delta) {
     nanos_per_pixel_log += delta / 500;
+    let last_data = data[data.length - 1];
+    let total_duration = last_data.start + last_data.duration - data[0].start;
+    let max_nanos_per_pixel_log = Math.log(total_duration / 100);
+    if (nanos_per_pixel_log < min_nanos_per_pixel_log) nanos_per_pixel_log = min_nanos_per_pixel_log;
+    if (nanos_per_pixel_log > max_nanos_per_pixel_log) nanos_per_pixel_log = max_nanos_per_pixel_log;
+
     let nanos_per_pixel_was = nanos_per_pixel;
     nanos_per_pixel = Math.exp(nanos_per_pixel_log);
     scroll_x_nanos -= mouse_x * (nanos_per_pixel - nanos_per_pixel_was);
+    clamp_horizontal_scroll();
+}
+
+function clamp_horizontal_scroll() {
+    let start = data[0].start - canvas.width * nanos_per_pixel;
+    let last_data = data[data.length - 1];
+    let end = last_data.start + last_data.duration;
+    if (scroll_x_nanos < start) scroll_x_nanos = start;
+    if (scroll_x_nanos > end) scroll_x_nanos = end;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // redraw
 
-var once = false;
 function redraw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -212,10 +226,6 @@ function redraw() {
         }
         ctx.stroke();
     }
-    if (!once) {
-        console.log([current_module_end_x, current_module_start_x]);
-        once = true;
-    }
 
     //
     // Draw mouse stuff
@@ -255,7 +265,7 @@ function redraw() {
         let module = modules_by_id[module_id];
         let section = sections[section_id];
         ctx.fillStyle = 'black';
-        ctx.fillText(`${module}.${section}: ${format_time(duration)} [start: ${format_time(start)}]`, 0 + 2, y);
+        ctx.fillText(`[${module}] ${section}: ${format_time(duration)} [start: ${format_time(start)}]`, 0 + 2, y);
         y -= 20;
     }
 
@@ -270,35 +280,34 @@ function redraw() {
         let section = sections[section_id];
         x = mouse_x + 4;
         let y = top + module_id * height + 36;
-        ctx.fillText(`${module}.${section}: ${format_time(duration)}`, x, y);
+        ctx.fillText(`[${module}] ${section}: ${format_time(duration)}`, x, y);
     }
 }
 
-function format_time(nanos) {
+function format_time(nanos, scale) {
+    let maximumFractionDigits = 3;
     if (nanos < 1000) {
-        nanos = nanos.toLocaleString('en-US', { maximumFractionDigits: 3 });
+        nanos = nanos.toLocaleString('en-US', { maximumFractionDigits });
         return `${nanos}ns`;
     }
     if (nanos < 1000_000) {
+        if (scale && scale < 1000) maximumFractionDigits = 6;
         let micros = nanos / 1000;
-        micros = micros.toLocaleString('en-US', { maximumFractionDigits: 3 });
+        micros = micros.toLocaleString('en-US', { maximumFractionDigits });
         return `${micros}\xb5s`;
     }
     if (nanos < 1000_000_000) {
+        if (scale && scale < 1000) maximumFractionDigits = 6;
         let millis = nanos / 1000_000;
-        millis = millis.toLocaleString('en-US', { maximumFractionDigits: 3 });
+        millis = millis.toLocaleString('en-US', { maximumFractionDigits });
         return `${millis}ms`;
     }
-    // if (nanos < 1000_000_000_000) {
-        let seconds = nanos / 1000_000_000;
-        seconds = seconds.toLocaleString('en-US', { maximumFractionDigits: 3 });
-        return `${seconds}s`;
-    // }
-}
 
-function format_float(f, d) {
-    if (d === undefined) d = 3;
-    return f.toLocaleString('en-US', { maximumFractionDigits: d });
+    if (scale && scale < 1000) maximumFractionDigits = 9;
+    if (scale && scale < 1000_000) maximumFractionDigits = 6;
+    let seconds = nanos / 1000_000_000;
+    seconds = seconds.toLocaleString('en-US', { maximumFractionDigits });
+    return `${seconds}s`;
 }
 
 function draw_thin_rect(x, y, w, h) {
@@ -320,7 +329,7 @@ function draw_scale_ruler(y) {
     // Determine the adequet scale
     let scale = 1;
     let scales = [];
-    for (let i = 0; i < 10; i++) {
+    while (scales.length < 3 && scale < Infinity) {
         let pixels = pixels_per_nano * scale;
         if (pixels > 10 && pixels < 100) scales.push(scale);
 
@@ -350,6 +359,7 @@ function draw_scale_ruler(y) {
         }
 
         if (i == scales.length - 1) {
+            current_scale = scale;
             ctx.stroke();
 
             y += 15;
@@ -390,7 +400,7 @@ function draw_scale_ruler(y) {
 
     if (mouse_x !== null) {
         x = mouse_x + 4;
-        ctx.fillText(`${format_time(mouse_nanos)}`, x, y);
+        ctx.fillText(`${format_time(mouse_nanos, current_scale)}`, x, y);
     }
 
     return y;
@@ -413,4 +423,14 @@ function draw_highlighted_region_duration() {
     ctx.fillStyle = 'black';
     ctx.font = '14px bold serif';
     ctx.fillText(`${format_time(Math.abs(t1 - t0))}`, x, y);
+}
+
+function format_float(f, d) {
+    if (d === undefined) d = 3;
+    return f.toLocaleString('en-US', { maximumFractionDigits: d });
+}
+
+function text_dimensions(text) {
+    let metrics = ctx.measureText(text);
+    return [metrics.width, metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent];
 }
