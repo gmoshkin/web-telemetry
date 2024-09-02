@@ -339,77 +339,96 @@ function draw_scale_ruler(y) {
     let mouse_nanos = scroll_x_nanos + mouse_x * nanos_per_pixel;
 
     // Determine the adequet scale
-    let scale = 1;
-    let scales = [];
-    while (scales.length < 3 && scale < Infinity) {
-        let pixels = pixels_per_nano * scale;
-        if (pixels > 10 && pixels < 100) scales.push(scale);
-
-        pixels = pixels_per_nano * scale * 2;
-        if (pixels > 10 && pixels < 100) scales.push(scale * 2);
-
-        pixels = pixels_per_nano * scale * 5;
-        if (pixels > 10 && pixels < 100) scales.push(scale * 5);
-
-        scale *= 10;
+    let current_pow10_scale = Math.pow(10, Math.floor(Math.log10(100 * nanos_per_pixel)));
+    let pixels_pow10 = pixels_per_nano * current_pow10_scale;
+    let current_scale = current_pow10_scale;
+    let pixels = pixels_pow10;
+    if (pixels_pow10 < 40) {
+        current_pow10_scale *= 10;
+        pixels_pow10 *= 10;
+        current_scale = current_pow10_scale * .4;
+        pixels = pixels_pow10 * .4;
+    }
+    if (pixels > 100) {
+        current_scale /= 2;
+        pixels /= 2;
     }
 
+    //
+    // draw the ruler
+    //
     ctx.beginPath();
+
     ctx.moveTo(0, y);
     ctx.lineTo(canvas.width, y);
 
-    h = 7;
-    for (let i = 0; i < scales.length; i++) {
-        let scale = scales[i];
-        let closest_multiple = Math.ceil(scroll_x_nanos / scale) * scale;
+    {
+        h = 15;
+        let closest_multiple = Math.ceil(scroll_x_nanos / current_pow10_scale) * current_pow10_scale;
         let x0 = (closest_multiple - scroll_x_nanos) * pixels_per_nano;
-        let pixels = pixels_per_nano * scale;
-
-        for (let x = x0; x < canvas.width; x += pixels) {
+        for (let x = x0; x < canvas.width; x += pixels_pow10) {
             ctx.moveTo(x, y - h / 2);
             ctx.lineTo(x, y + h / 2);
         }
 
-        if (i == scales.length - 1) {
-            current_scale = scale;
-            ctx.stroke();
-
-            y += 15;
-
-            let mouse_closest_multiple = Math.floor(mouse_nanos / scale) * scale;
-            let x0 = (mouse_closest_multiple - scroll_x_nanos) * pixels_per_nano;
-
-            let text = `${format_time(scale)}`;
-            ctx.font = "14px bold serif";
-            let m = ctx.measureText(text);
-
-            h /= 1.31;
-            ctx.strokeStyle = '#808080';
-            ctx.beginPath();
-            ctx.moveTo(x0, y - h / 2);
-            ctx.lineTo(x0, y + h / 2);
-
-            ctx.moveTo(x0, y);
-            let l = pixels / 2 - m.width / 2 - 3;
-            ctx.lineTo(x0 + l, y);
-            ctx.moveTo(x0 + pixels - l, y);
-            ctx.lineTo(x0 + pixels, y);
-
-            ctx.moveTo(x0 + pixels, y - h / 2);
-            ctx.lineTo(x0 + pixels, y + h / 2);
-            ctx.stroke();
-
-            ctx.fillStyle = '#808080';
-            y += 5;
-            x = x0 + pixels / 2 - m.width / 2;
-            ctx.fillText(text, x, y);
+        h = 8;
+        let previous_pow10_scale = current_pow10_scale / 10;
+        let pixels = pixels_pow10 / 10;
+        let x = x0 - pixels_pow10;
+        while (x < canvas.width) {
+            x += pixels;
+            for (let i = 0; i < 9; i++) {
+                ctx.moveTo(x, y - h / 2);
+                ctx.lineTo(x, y + h / 2);
+                x += pixels;
+            }
         }
+    }
 
-        h *= 1.45;
+    ctx.stroke();
+
+    y += 15;
+
+    //
+    // draw current scale indicator on the ruler
+    //
+    {
+        let granularity = current_scale;
+        let mouse_closest_multiple = Math.floor(mouse_nanos / granularity) * granularity;
+        let offset = 0;
+        x0 = (mouse_closest_multiple - scroll_x_nanos) * pixels_per_nano + offset;
+
+        let text = `${format_time(current_scale)}`;
+        ctx.font = "14px bold serif";
+        let m = ctx.measureText(text);
+
+        h /= 1.31;
+        ctx.strokeStyle = '#808080';
+        ctx.beginPath();
+        ctx.moveTo(x0, y - h / 2);
+        ctx.lineTo(x0, y + h / 2);
+
+        ctx.moveTo(x0, y);
+        let l = pixels / 2 - m.width / 2 - 3;
+        ctx.lineTo(x0 + l, y);
+        ctx.moveTo(x0 + pixels - l, y);
+        ctx.lineTo(x0 + pixels, y);
+
+        ctx.moveTo(x0 + pixels, y - h / 2);
+        ctx.lineTo(x0 + pixels, y + h / 2);
+        ctx.stroke();
+
+        ctx.fillStyle = '#808080';
+        y += 5;
+        x = x0 + pixels / 2 - m.width / 2;
+        ctx.fillText(text, x, y);
     }
 
     y += 16;
 
+    //
+    // draw time at mouse location
+    //
     if (mouse_x !== null) {
         x = mouse_x + 4;
         ctx.fillText(`${format_time(mouse_nanos, current_scale)}`, x, y);
