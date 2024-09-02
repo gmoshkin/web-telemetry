@@ -1,10 +1,5 @@
 /* TODO:
  * - display module name on the left on each of the lanes
- * - display section name inside the rectangle, truncate obviously
- * - show stats for the currently highlighted section:
- *    - count appearances
- *    - total duration
- *    - mean/average/standard deviation
  */
 const canvas = document.getElementById("canvas");
 canvas.width = 1300;
@@ -27,6 +22,7 @@ var selected = null;
 var data = JSON.parse(DATA);
 var nanos_per_pixel_log = 10;
 var nanos_per_pixel = null;
+let pixels_per_nano = null;
 let current_scale = null;
 
 var modules_by_name = {};
@@ -139,8 +135,7 @@ function redraw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     nanos_per_pixel = Math.exp(nanos_per_pixel_log);
-
-    let scale = 1 / nanos_per_pixel;
+    pixels_per_nano = 1 / nanos_per_pixel;
 
     ctx.fillStyle = 'red';
     ctx.strokeStyle = 'black';
@@ -184,9 +179,9 @@ function redraw() {
     for (let i = 0; i < data.length; i++) {
         let { start, duration, module_id, section_id } = data[i];
 
-        let x = (start - scroll_x_nanos) * scale;
+        let x = (start - scroll_x_nanos) * pixels_per_nano;
         let y = timings_top + module_id * timings_height;
-        let w = duration * scale;
+        let w = duration * pixels_per_nano;
         if (x + w < 0) continue;
         if (x > canvas.width) break;
 
@@ -247,22 +242,7 @@ function redraw() {
     ctx.fillStyle = '#303030';
     ctx.font = "14px bold serif";
     for (const i of sections_to_name) {
-        let { start, duration, module_id, section_id } = data[i];
-        let w = duration * scale;
-
-        let module = modules_by_id[module_id];
-        let section = sections[section_id];
-        let text = `[${module}] ${section}`;
-        let [text_w, ya, yd] = text_dimensions(text);
-
-        let padding = 3;
-        let x = (start - scroll_x_nanos) * scale + padding;
-        let y = timings_top + (module_id + 1) * timings_height - yd - padding;
-
-        w -= padding * 2;
-        if (text_w > w) text = text.substr(0, text.length / text_w * w);
-
-        if (text.length > 1) ctx.fillText(text, x, y, w);
+        draw_text_on_section_rect(data[i]);
     }
 
     //
@@ -282,19 +262,22 @@ function redraw() {
     //
     if (super_highlighted_section) {
         let { start, duration, module_id, section_id } = super_highlighted_section;
-        let x = (start - scroll_x_nanos) * scale;
+        let x = (start - scroll_x_nanos) * pixels_per_nano;
         let y = timings_top + module_id * timings_height;
-        let w = duration * scale;
+        let w = duration * pixels_per_nano;
         ctx.fillStyle = '#ff8080';
         ctx.fillRect(x, y, w, timings_height);
+        // ctx.fillStyle('black');
+        // javascript sucks fucking ass! I dont know why this dont work...
+        // draw_text_on_section_rect(super_highlighted_section);
     }
     for (let i = 0; i < highlighted_sections.length; i++) {
         let { start, duration, module_id, section_id } = highlighted_sections[i];
 
         {
-            let x = (start - scroll_x_nanos) * scale;
+            let x = (start - scroll_x_nanos) * pixels_per_nano;
             let y = timings_top + module_id * timings_height;
-            let w = duration * scale;
+            let w = duration * pixels_per_nano;
             ctx.lineWidth = 3;
             ctx.strokeStyle = 'yellow';
             draw_thin_rect(x, y, w, timings_height);
@@ -314,17 +297,183 @@ function redraw() {
     draw_super_highlighted_section_info(super_highlighted_section);
 }
 
+function draw_text_on_section_rect(section_info) {
+    let { start, duration, module_id, section_id } = section_info;
+    let w = duration * pixels_per_nano;
+
+    let module = modules_by_id[module_id];
+    let section = sections[section_id];
+    let text = `[${module}] ${section}`;
+    let [text_w, ya, yd] = text_dimensions(text);
+
+    let padding = 3;
+    let x = (start - scroll_x_nanos) * pixels_per_nano + padding;
+    if (x < 0) x += Math.min(padding -x, w - text_w - 2 * padding);
+
+    let y = timings_top + (module_id + 1) * timings_height - yd - padding;
+
+    w -= padding * 2;
+    if (text_w > w) text = text.substr(0, text.length / text_w * w);
+
+    if (text.length > 1) ctx.fillText(text, x, y, w);
+}
+
 function draw_super_highlighted_section_info(section_info) {
     if (!section_info) return;
     let { start, duration, module_id, section_id } = section_info;
 
+    // draw popup section info next to mouse cursor
+    {
+        ctx.fillStyle = 'black';
+        ctx.font = "18px bold serif";
+        let module = modules_by_id[module_id];
+        let section = sections[section_id];
+        let x = mouse_x + 4;
+        let y = timings_top + module_id * timings_height + 36;
+        let text = `[${module}] ${section}: ${format_time(duration)}`;
+        let [w, ya, yd] = text_dimensions(text);
+        ctx.fillStyle = '#303030c0';
+        let rect_padding = 3;
+        {
+            let rect_x = x - rect_padding;
+            let rect_y = y + yd + rect_padding;
+            let rect_w = w + rect_padding * 2;
+            let rect_h = ya + yd + rect_padding * 2;
+            ctx.fillRect(rect_x, rect_y, rect_w, -rect_h);
+        }
+        ctx.fillStyle = '#e0e0e0';
+        ctx.fillText(text, x, y);
+    }
+
+    // draw section stats in bottow right corner
+    let right = canvas.width - 4;
+    let bottom = canvas.height - 4;
+    let occurences = 0;
+    let total_duration = 0;
+    let mean = 0;
+    let min = Infinity;
+    let max = 0;
+    let start_of_section_with_max_duration = null;
+    let standard_deviation = 0;
+
+    for (const section_info of data) {
+        if (section_info.module_id != module_id) continue;
+        if (section_info.section_id != section_id) continue;
+
+        let duration = section_info.duration;
+        total_duration += duration;
+        occurences += 1;
+        min = Math.min(duration, min);
+        if (duration > max) {
+            max = duration;
+            start_of_section_with_max_duration = section_info.start;
+        }
+    }
+
+    mean = total_duration / occurences;
+    for (const section_info of data) {
+        if (section_info.module_id != module_id) continue;
+        if (section_info.section_id != section_id) continue;
+
+        let duration = section_info.duration;
+        standard_deviation += duration * duration / occurences;
+    }
+    standard_deviation = Math.sqrt(standard_deviation - mean * mean);
+
+    let text_lines = [];
+    text_lines.push(`count: ${occurences}`);
+    text_lines.push(`sum: ${format_time(total_duration)}`);
+    text_lines.push(`max: ${format_time(max)}`);
+    text_lines.push(`avg: ${format_time(mean)}`);
+    text_lines.push(`sd: ${format_time(standard_deviation)}`);
+    text_lines.push(`min: ${format_time(min)}`);
+
+    let max_w = 0;
+    let max_h = 0;
+    for (const text of text_lines) {
+        let [w, ya, yd] = text_dimensions(text);
+        max_w = Math.max(w, max_w);
+        max_h = Math.max(max_h, ya + yd);
+    }
+
     ctx.fillStyle = 'black';
-    ctx.font = "18px bold serif";
-    let module = modules_by_id[module_id];
-    let section = sections[section_id];
-    x = mouse_x + 4;
-    let y = timings_top + module_id * timings_height + 36;
-    ctx.fillText(`[${module}] ${section}: ${format_time(duration)}`, x, y);
+    let x = right - max_w;
+    let y = bottom - 3;
+    let i = text_lines.length - 1;
+    while (i >= 0) {
+        let text = text_lines[i];
+        i--;
+        ctx.fillText(text, x, y);
+        y -= timings_height + 3;
+    }
+
+    ctx.fillStyle = 'red';
+    ctx.strokeStyle = 'black';
+    ctx.lineWidth = 1;
+    let bars_right = x - 5;
+    y = bottom - timings_height;
+
+    let duration_value = min;
+    {
+        let w = duration_value * pixels_per_nano;
+        let x = bars_right - w;
+        ctx.fillRect(x, y, w, timings_height);
+        draw_thin_rect(x, y, w, timings_height);
+        y -= timings_height + 3;
+    }
+
+    duration_value = standard_deviation;
+    {
+        let w = duration_value * pixels_per_nano;
+        let x = bars_right - w;
+        ctx.fillRect(x, y, w, timings_height);
+        draw_thin_rect(x, y, w, timings_height);
+        y -= timings_height + 3;
+    }
+
+    duration_value = mean;
+    {
+        let w = duration_value * pixels_per_nano;
+        let x = bars_right - w;
+        ctx.fillRect(x, y, w, timings_height);
+        draw_thin_rect(x, y, w, timings_height);
+        y -= timings_height + 3;
+    }
+
+    duration_value = max;
+    {
+        let w = duration_value * pixels_per_nano;
+        let x = bars_right - w;
+        ctx.fillRect(x, y, w, timings_height);
+        draw_thin_rect(x, y, w, timings_height);
+
+        let text = `start: ${format_time(start_of_section_with_max_duration)}`;
+        let [text_w, text_ya, text_yd] = text_dimensions(text);
+        let text_padding = 3;
+
+        let text_x;
+        let text_y = y + timings_height - text_padding;
+        if (text_w > w - 2 * text_padding) {
+            text_x = x - text_w - text_padding * 2;
+        } else {
+            text_x = bars_right - text_w - text_padding;
+        }
+        ctx.fillStyle = 'black';
+        ctx.fillText(text, text_x, text_y);
+
+        y -= timings_height + 3;
+    }
+
+    ctx.fillStyle = 'red';
+    duration_value = total_duration;
+    {
+        let w = duration_value * pixels_per_nano;
+        let x = bars_right - w;
+        ctx.fillRect(x, y, w, timings_height);
+        draw_thin_rect(x, y, w, timings_height);
+        y -= timings_height + 3;
+    }
+
 }
 
 function format_time(nanos, scale) {
@@ -366,7 +515,6 @@ function draw_thin_rect(x, y, w, h) {
 function draw_scale_ruler(y) {
     let x = 0;
 
-    let pixels_per_nano = 1 / nanos_per_pixel;
     let mouse_nanos = scroll_x_nanos + mouse_x * nanos_per_pixel;
 
     // Determine the adequet scale
