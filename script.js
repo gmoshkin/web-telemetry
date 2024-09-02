@@ -173,6 +173,7 @@ function redraw() {
     let current_module_separators = [];
     let current_module_start_x = [];
     let current_module_end_x = [];
+    let sections_to_name = [];
     for (let module_id = 0; module_id < modules_by_id.length; module_id++) {
         current_module_separators[module_id] = [];
         current_module_start_x[module_id] = 0;
@@ -188,6 +189,8 @@ function redraw() {
         let w = duration * scale;
         if (x + w < 0) continue;
         if (x > canvas.width) break;
+
+        if (w > 10) sections_to_name.push(i);
 
         if (mouse_x >= x && mouse_x <= x + w) {
             highlighted_sections.push(data[i]);
@@ -239,6 +242,27 @@ function redraw() {
             ctx.lineTo(xj, y + timings_height);
         }
         ctx.stroke();
+    }
+
+    ctx.fillStyle = '#303030';
+    ctx.font = "14px bold serif";
+    for (const i of sections_to_name) {
+        let { start, duration, module_id, section_id } = data[i];
+        let w = duration * scale;
+
+        let module = modules_by_id[module_id];
+        let section = sections[section_id];
+        let text = `[${module}] ${section}`;
+        let [text_w, ya, yd] = text_dimensions(text);
+
+        let padding = 3;
+        let x = (start - scroll_x_nanos) * scale + padding;
+        let y = timings_top + (module_id + 1) * timings_height - yd - padding;
+
+        w -= padding * 2;
+        if (text_w > w) text = text.substr(0, text.length / text_w * w);
+
+        if (text.length > 1) ctx.fillText(text, x, y, w);
     }
 
     //
@@ -470,7 +494,7 @@ function format_float(f, d) {
 
 function text_dimensions(text) {
     let metrics = ctx.measureText(text);
-    return [metrics.width, metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent];
+    return [metrics.width, metrics.actualBoundingBoxAscent, metrics.actualBoundingBoxDescent];
 }
 
 redraw();
