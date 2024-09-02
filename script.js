@@ -129,6 +129,8 @@ function clamp_horizontal_scroll() {
 
 let time_last_redraw = -Infinity;
 let time_now = null;
+let timings_top = null;
+let timings_height = null;
 function redraw() {
     time_now = window.performance.now();
     if (time_now - time_last_redraw < 16.666) return;
@@ -162,9 +164,9 @@ function redraw() {
     let highlighted_sections = [];
     let super_highlighted_section = null;
 
-    var height = 20;
     var x = 0;
-    let top = y + 10;
+    timings_top = y + 10;
+    timings_height = 20;
 
     i = 0;
     let sanity_check = 1000;
@@ -182,14 +184,14 @@ function redraw() {
         let { start, duration, module_id, section_id } = data[i];
 
         let x = (start - scroll_x_nanos) * scale;
-        let y = top + module_id * height;
+        let y = timings_top + module_id * timings_height;
         let w = duration * scale;
         if (x + w < 0) continue;
         if (x > canvas.width) break;
 
         if (mouse_x >= x && mouse_x <= x + w) {
             highlighted_sections.push(data[i]);
-            if (mouse_y >= y && mouse_y <= y + height)
+            if (mouse_y >= y && mouse_y <= y + timings_height)
                 super_highlighted_section = data[i];
         }
 
@@ -202,15 +204,15 @@ function redraw() {
 
         let x0 = current_module_start_x[module_id];
         let x1 = current_module_end_x[module_id];
-        ctx.fillRect(x0, y, x1 - x0, height);
-        draw_thin_rect(x0, y, x1 - x0, height);
+        ctx.fillRect(x0, y, x1 - x0, timings_height);
+        draw_thin_rect(x0, y, x1 - x0, timings_height);
 
         let separators = current_module_separators[module_id];
         ctx.beginPath();
         for (let j = 0; j < separators.length - 1; j++) {
             let xj = separators[j];
             ctx.moveTo(xj, y);
-            ctx.lineTo(xj, y + height);
+            ctx.lineTo(xj, y + timings_height);
         }
         ctx.stroke();
 
@@ -225,16 +227,16 @@ function redraw() {
         let x0 = current_module_start_x[module_id];
         if (x0 == 0) continue;
         let x1 = current_module_end_x[module_id];
-        let y = top + module_id * height;
-        ctx.fillRect(x0, y, x1 - x0, height);
-        draw_thin_rect(x0, y, x1 - x0, height);
+        let y = timings_top + module_id * timings_height;
+        ctx.fillRect(x0, y, x1 - x0, timings_height);
+        draw_thin_rect(x0, y, x1 - x0, timings_height);
 
         let separators = current_module_separators[module_id];
         ctx.beginPath();
         for (let j = 0; j < separators.length - 1; j++) {
             let xj = separators[j];
             ctx.moveTo(xj, y);
-            ctx.lineTo(xj, y + height);
+            ctx.lineTo(xj, y + timings_height);
         }
         ctx.stroke();
     }
@@ -257,21 +259,21 @@ function redraw() {
     if (super_highlighted_section) {
         let { start, duration, module_id, section_id } = super_highlighted_section;
         let x = (start - scroll_x_nanos) * scale;
-        let y = top + module_id * height;
+        let y = timings_top + module_id * timings_height;
         let w = duration * scale;
         ctx.fillStyle = '#ff8080';
-        ctx.fillRect(x, y, w, height);
+        ctx.fillRect(x, y, w, timings_height);
     }
     for (let i = 0; i < highlighted_sections.length; i++) {
         let { start, duration, module_id, section_id } = highlighted_sections[i];
 
         {
             let x = (start - scroll_x_nanos) * scale;
-            let y = top + module_id * height;
+            let y = timings_top + module_id * timings_height;
             let w = duration * scale;
             ctx.lineWidth = 3;
             ctx.strokeStyle = 'yellow';
-            draw_thin_rect(x, y, w, height);
+            draw_thin_rect(x, y, w, timings_height);
         }
 
         let module = modules_by_id[module_id];
@@ -284,16 +286,21 @@ function redraw() {
     // Draw highlighted region duration
     draw_highlighted_region_duration();
 
-    if (super_highlighted_section) {
-        let { start, duration, module_id, section_id } = super_highlighted_section;
-        ctx.fillStyle = 'black';
-        ctx.font = "18px bold serif";
-        let module = modules_by_id[module_id];
-        let section = sections[section_id];
-        x = mouse_x + 4;
-        let y = top + module_id * height + 36;
-        ctx.fillText(`[${module}] ${section}: ${format_time(duration)}`, x, y);
-    }
+    // Draw super highlighted section info
+    draw_super_highlighted_section_info(super_highlighted_section);
+}
+
+function draw_super_highlighted_section_info(section_info) {
+    if (!section_info) return;
+    let { start, duration, module_id, section_id } = section_info;
+
+    ctx.fillStyle = 'black';
+    ctx.font = "18px bold serif";
+    let module = modules_by_id[module_id];
+    let section = sections[section_id];
+    x = mouse_x + 4;
+    let y = timings_top + module_id * timings_height + 36;
+    ctx.fillText(`[${module}] ${section}: ${format_time(duration)}`, x, y);
 }
 
 function format_time(nanos, scale) {
