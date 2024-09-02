@@ -11,7 +11,7 @@ canvas.width = 1300;
 canvas.height = 600;
 const ctx = canvas.getContext("2d");
 
-setInterval(redraw, 17);
+// setInterval(redraw, 17);
 
 var mode = null;
 var lastButton = null;
@@ -60,15 +60,20 @@ const Mue = '\xb5';
 let scroll_x_nanos = data[1].start;
 
 canvas.onmousemove = (event) => {
-    update_mouse_position(event)
+    update_mouse_position(event);
+    redraw();
 };
 canvas.onmousedown = (event) => {
     update_mouse_position(event)
     mouseDown = event.which;
     mouse_x_start = mouse_x;
     mouse_y_start = mouse_y;
+    redraw();
 };
-canvas.onmouseup = (event) => { mouseDown = false };
+canvas.onmouseup = (event) => {
+    mouseDown = false;
+    redraw();
+};
 
 addEventListener("wheel", (event) => {
     if (event.target != canvas) return;
@@ -82,6 +87,7 @@ addEventListener("wheel", (event) => {
         else do_horizontal_scrolling(event.wheelDeltaY);
     }
     if (event.deltaZ) do_zooming(event.deltaZ);
+    redraw();
 }, {passive: false});
 
 let canvas_rect = canvas.getBoundingClientRect();
@@ -121,7 +127,13 @@ function clamp_horizontal_scroll() {
 ////////////////////////////////////////////////////////////////////////////////
 // redraw
 
+let time_last_redraw = -Infinity;
+let time_now = null;
 function redraw() {
+    time_now = window.performance.now();
+    if (time_now - time_last_redraw < 16.666) return;
+    time_last_redraw = time_now;
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     nanos_per_pixel = Math.exp(nanos_per_pixel_log);
@@ -434,3 +446,5 @@ function text_dimensions(text) {
     let metrics = ctx.measureText(text);
     return [metrics.width, metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent];
 }
+
+redraw();
